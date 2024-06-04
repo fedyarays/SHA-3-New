@@ -1,92 +1,152 @@
-HashLength = 32
-SHA3_WORD = 64  # Длина слова в битах
-SHA3_BLOCKSIZE = 1600  # Длина блока в битах
-SHA3_ROUND = 24  # Количество раундов
+import numpy as np
 
-c = HashLength * 8 * 2  # Capacity
-r = 1600 - c  # Bit rate
+l_list = [0, 1, 2, 3, 4, 5, 6]
+l = l_list[6]
+w = (2 ** l)
+b = 25 * w
 
-# Константы для алгоритма
-MM1M5 = [4, 0, 1, 2, 3]
-MP1M5 = [1, 2, 3, 4, 0]
-M2XP3YM5 = [[0, 2, 4, 1, 3], [3, 0, 2, 4, 1], [1, 3, 0, 2, 4], [4, 1, 3, 0, 2], [2, 4, 1, 3, 0]]
-R = [
-    [0, 1, 62, 28, 27], [36, 44, 6, 55, 20], [3, 10, 43, 25, 39], [41, 45, 15, 21, 8], [18, 2, 61, 56, 14]
-]
-RC = [
-    0x0000000000000001, 0x0000000000008082, 0x800000000000808A, 0x8000000080008000, 0x000000000000808B,
-    0x0000000080000001,
-    0x8000000080008081, 0x8000000000008009, 0x000000000000008A, 0x0000000000000088, 0x0000000080008009,
-    0x000000008000000A,
-    0x000000008000808B, 0x800000000000008B, 0x8000000000008089, 0x8000000000008003, 0x8000000000008002,
-    0x8000000000000080,
-    0x000000000000800A, 0x800000008000000A, 0x8000000080008081, 0x8000000000008080, 0x0000000080000001,
-    0x8000000080008008
-]
+shifts = [[0, 36, 3, 41, 18],
+          [1, 44, 10, 45, 2],
+          [62, 6, 43, 15, 61],
+          [28, 55, 25, 21, 56],
+          [27, 20, 39, 8, 14]]
 
+RCs = [0x0000000000000001, 0x0000000000008082, 0x800000000000808a,
+       0x8000000080008000, 0x000000000000808b, 0x0000000080000001,
+       0x8000000080008081, 0x8000000000008009, 0x000000000000008a,
+       0x0000000000000088, 0x0000000080008009, 0x000000008000000a,
+       0x000000008000808b, 0x800000000000008b, 0x8000000000008089,
+       0x8000000000008003, 0x8000000000008002, 0x8000000000000080,
+       0x000000000000800a, 0x800000008000000a, 0x8000000080008081,
+       0x8000000000008080, 0x0000000080000001, 0x8000000080008008]
 
-def ROT(val, r_bits):
-    return ((val << r_bits) & ((1 << 64) - 1)) | (val >> (64 - r_bits))
+# Функция для чтения битовой строки из файла
+def get_bitstring_from_file(filename):
+    with open(filename, 'rb') as fh:
+        bytetext = fh.read()
+    return bytes_to_bitstring(bytetext)
 
+# Функция для преобразования байтов в битовую строку
+def bytes_to_bitstring(in_bytes):
+    bitstring = ''
+    for bytechar in in_bytes:
+        byte = '{0:08b}'.format(bytechar)
+        byte = byte[::-1]
+        bitstring += byte
+    bitstring += '01100000'
+    return bitstring
 
-def Round(A):
-    for rnd in range(SHA3_ROUND):
-        C = [A[x] ^ A[x + 5] ^ A[x + 10] ^ A[x + 15] ^ A[x + 20] for x in range(5)]
-        D = [C[x] ^ ROT(C[MP1M5[x]], 1) for x in range(5)]
-        A = [(A[x] ^ D[x % 5]) for x in range(25)]
+# Функция для преобразования строки в массив состояния
+def string_to_array(string, w=64):
+    state_array = np.zeros([5, 5, w], dtype=int)
+    for x in range(5):
+        for y in range(5):
+            for z in range(w):
+                if (w * (5 * x + y) + z) < len(string):
+                    state_array[y][x][z] = int(string[w * (5 * x + y) + z])
+    return state_array
 
-        B = [0] * 25
-        for x in range(5):
-            for y in range(5):
-                B[y * 5 + M2XP3YM5[x][y]] = ROT(A[x * 5 + y], R[x][y])
+# Функция для преобразования шестнадцатеричного числа в массив
+def hex_to_array(hexnum, w=64):
+    bitstring = '{0:064b}'.format(hexnum)
+    bitstring = bitstring[-w:]
+    array = np.array([int(bitstring[i]) for i in range(w)])
+    return array
 
-        for x in range(5):
-            for y in range(5):
-                A[x * 5 + y] = B[x * 5 + y] ^ ((~B[MP1M5[x] * 5 + y]) & B[MP1M5[MP1M5[x]] * 5 + y])
+# Функция для дополнения сообщения
+def pad(rate, message_length):
+    j = (-(message_length + 1)) % rate
+    return '0' * j + '1'
 
-        A[0] ^= RC[rnd]
+# Функция Theta преобразования
+def theta(array, w=64):
+    array_prime = array.copy()
+    C, D = np.zeros([5, w], dtype=int), np.zeros([5, w], dtype=int)
+    for x in range(5):
+        for y in range(5):
+            C[x] ^= array[x][y]
+    for x in range(5):
+        D[x] = C[(x - 1) % 5] ^ np.roll(C[(x + 1) % 5], 1)
+    for x in range(5):
+        for y in range(5):
+            array_prime[x][y] ^= D[x]
+    return array_prime
 
-    return A
+# Функция Rho преобразования
+def rho(array):
+    array_prime = array.copy()
+    for x in range(5):
+        for y in range(5):
+            array_prime[x][y] = np.roll(array[x][y], shifts[x][y])
+    return array_prime
 
+# Функция Pi преобразования
+def pi(array):
+    array_prime = array.copy()
+    for x in range(5):
+        for y in range(5):
+            array_prime[x][y] = array[((x) + (3 * y)) % 5][x]
+    return array_prime
 
-def pad10star1(message, r):
-    padding = [0] * ((r - len(message) % r) // 8)
-    padding[0] = 0x01
-    padding[-1] |= 0x80
-    return message + bytes(padding)
+# Функция Chi преобразования
+def chi(array):
+    array_prime = np.zeros(array.shape, dtype=int)
+    for x in range(5):
+        for y in range(5):
+            array_prime[x][y] = array[x][y] ^ ((array[(x + 1) % 5][y] ^ 1) & (array[(x + 2) % 5][y]))
+    return array_prime
 
+# Функция Iota преобразования
+def iota(array, round_index, w=64):
+    RC = hex_to_array(RCs[round_index], w)
+    RC = np.flip(RC)
+    array_prime = array.copy()
+    array_prime[0][0] ^= RC
+    return array_prime
 
-def Keccak(message, r, c):
-    message = pad10star1(message, r)
-    n = len(message) * 8 // r
-    state = [0] * 25
+# Функция Keccak для выполнения всех раундов преобразований
+def keccak(state):
+    for round_index in range(24):
+        state = iota(chi(pi(rho(theta(state)))), round_index)
+    return state
 
-    for i in range(n):
-        block = int.from_bytes(message[i * (r // 8):(i + 1) * (r // 8)], 'little')
-        for j in range(r // 64):
-            state[j] ^= (block >> (64 * j)) & 0xFFFFFFFFFFFFFFFF
-        state = Round(state)
+# Функция для преобразования массива состояния в хэш-значение
+def squeeze(array, bits):
+    hash = ''
+    for i in range(5):
+        for j in range(5):
+            lane = array[j][i]
+            lanestring = ''
+            for m in range(len(lane)):
+                lanestring += str(lane[m])
+            for n in range(0, len(lanestring), 8):
+                byte = lanestring[n:n + 8]
+                byte = byte[::-1]
+                hash += '{0:02x}'.format(int(byte, 2))
+    return hash[:int(bits / 4)]
 
-    hash_val = b''
-    while len(hash_val) * 8 < c:
-        hash_val += (state[0] & 0xFFFFFFFFFFFFFFFF).to_bytes(8, 'little')
-        state = Round(state)
-
-    return hash_val[:c // 8]
-
-
+# Основная функция для хэширования файла
 def hash_file(path):
-    with open(path, 'rb') as file:
-        data = file.read()
-    hash_val = Keccak(data, r, c)
-    return hash_val.hex()
+    outbits = 256
+    capacity = 2 * outbits
+    rate = b - capacity
+    bitstring = get_bitstring_from_file(path)
+    padded = bitstring + pad(rate, len(bitstring) % rate)
+    sponge_rounds = len(padded) // rate
+    state = np.zeros(b, dtype=int).reshape(5, 5, w)
+    for i in range(sponge_rounds):
+        current_string = padded[(i * rate):(i * rate) + rate]
+        array = string_to_array(current_string, w=64)
+        state = np.bitwise_xor(state, array)
+        state = keccak(state)
+    return squeeze(state, outbits)
 
-
+# Функция для сохранения хэш-значения в файл
 def save_file(hash_val, output_path):
     with open(output_path, 'w') as file:
         file.write(hash_val)
 
-
+# Основной блок программы
 if __name__ == "__main__":
     input_file = "input.txt"
     output_file = "output_hash.txt"
